@@ -1,4 +1,8 @@
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -18,12 +22,12 @@ void main(int argc, char **argv)
 		exit(1);
 	}
 	
-	pipe_fd = open("/dev/pipey", "w");
+	pipe_fd = open("/dev/pipey", O_WRONLY);
 	if (pipe_fd < 0) {
 		perror("ERROR!! Failed to open pipe");
 		exit(2);
 	}
-	file_fd = open(argv[1], "r");
+	file_fd = open(argv[1], O_RDONLY);
 	if (file_fd < 0) {
 		perror("ERROR!! Failed to open file to read from");
 		exit(3);
@@ -34,7 +38,7 @@ void main(int argc, char **argv)
 		memset(buffer, 0, BUFFER_SIZE);
 		readed_from_file = read(file_fd, buffer, BUFFER_SIZE);
 		if (readed_from_file <= 0) {
-			ioctl(pipe_fd, 0x10, 0);
+			ioctl(pipe_fd, 0x10);
 			break;
 		}
 		if (write(pipe_fd, buffer, readed_from_file) <= 0) {

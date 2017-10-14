@@ -152,10 +152,11 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 	unsigned long available_bytes = 0;
 	
 	while (true) {
+		printk("Cycling in pipey_write...\n");
 		if (writer_handle < reader_handle) {
 			available_bytes = reader_handle - writer_handle;
 			if (sz < available_bytes) {
-				if (copy_from_user((void *)buf, cyclic_buffer + writer_handle, sz)) {
+				if (copy_from_user(cyclic_buffer + writer_handle, buf, sz)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}
@@ -164,7 +165,7 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 				sz = 0;
 			}
 			else {
-				if (copy_from_user((void *)buf, cyclic_buffer + writer_handle, available_bytes)) {
+				if (copy_from_user(cyclic_buffer + writer_handle, buf, available_bytes)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}
@@ -176,7 +177,7 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 		else if ((writer_handle > reader_handle) || (writer_handle == reader_handle && buffer_not_empty == 0)) {
 			available_bytes = CBUFFERSIZE - writer_handle;
 			if (sz < available_bytes) {
-				if (copy_from_user((void *)buf, cyclic_buffer + writer_handle, sz)) {
+				if (copy_from_user(cyclic_buffer + writer_handle, buf, sz)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}
@@ -185,7 +186,7 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 				sz = 0;
 			}
 			else {
-				if (copy_from_user((void *)buf, cyclic_buffer + writer_handle, available_bytes)) {
+				if (copy_from_user(cyclic_buffer + writer_handle, buf, available_bytes)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}
@@ -193,7 +194,7 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 				writer_handle = 0;
 				sz -= available_bytes;
 				copied = sz <= reader_handle ? sz : reader_handle;
-				if (copy_from_user((void *)buf, cyclic_buffer, copied)) {
+				if (copy_from_user(cyclic_buffer, buf, copied)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}

@@ -1,4 +1,8 @@
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -18,12 +22,12 @@ void main(int argc, char **argv)
 		exit(1);
 	}
 	
-	pipe_fd = open("/dev/pipey", "r");
+	pipe_fd = open("/dev/pipey", O_RDONLY);
 	if (pipe_fd < 0) {
 		perror("ERROR!! Failed to open pipe");
 		exit(2);
 	}
-	file_fd = open(argv[1], "w");
+	file_fd = open(argv[1], O_WRONLY | O_CREAT);
 	if (file_fd < 0) {
 		perror("ERROR!! Failed to open file to write to");
 		exit(3);
