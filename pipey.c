@@ -27,13 +27,11 @@ static int exclusive_read = 0;
 struct cdev pipey_cdev;
 static dev_t dev;
 const struct file_operations pipey_file_ops;
+static uid_t writing_user_id;
 
 
 static char *init_cyclic_buffer(void)
 {
-	if (cyclic_buffer) {
-		kfree(cyclic_buffer);
-	}
 	char *buffer = (char *)kzalloc(CBUFFERSIZE * sizeof(char), GFP_USER);
 	if (buffer == NULL) {
 		printk("ERROR!! Failed to allocate memory for cyclic buffer.\n");
@@ -42,17 +40,16 @@ static char *init_cyclic_buffer(void)
 	reader_handle = 0;
 	writer_handle = 0;
 	is_eof = 0;
+	writing_user_id = 0;
+	buffer_not_empty = 0;
 	return buffer;
 }
 
 
 static int pipey_open(struct inode *i, struct file *f) 
 {
-	cyclic_buffer = init_cyclic_buffer();
-	if (!cyclic_buffer) {
-		return -1;
-	}
-	f->private_data = &(current_uid().val);//&(get_current_user()->uid.val);
+	f->private_data = &(current_uid().val);
+	printk("Reg fd %d, %d\n", *(uid_t *)(f->private_data), current_uid().val);
 	return 0;
 }
 
@@ -67,9 +64,12 @@ static long pipey_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 			return is_eof;
 		case PIPEY_SET_EXCL_READ:
 			exclusive_read = 1;
+			writing_user_id = *(uid_t *)(f->private_data);
+			printk("Set user id %d\n", writing_user_id);
 			break;
 		case PIPEY_SET_NORM_READ:
 			exclusive_read = 0;
+			writing_user_id = 0;
 			break;
 		default:
 			printk("ERROR! Unrecognizable code 0x%x sent to ioctl\n", cmd);
@@ -85,11 +85,10 @@ static ssize_t pipey_read(struct file *f, char __user *buf, size_t sz, loff_t *o
 	ssize_t written = 0;
 	unsigned long available_bytes = 0;
 	
-	printk("excl: %d %d %d", exclusive_read, (*(uid_t *)(f->private_data)), get_current_user()->uid.val);
 	// Writes into buf! (user space app READS us)
-	if (exclusive_read && (*(uid_t *)(f->private_data)) != current_uid().val) {
-	//get_current_user()->uid.val) {
+	if (exclusive_read && writing_user_id != current_uid().val) {
 		printk("Exclusive read mode - reading not permitted for you.\n");
+		printk("(you: %d, host: %d)\n", current_uid().val, writing_user_id);
 		return -1;
 	}
 	
@@ -245,6 +244,11 @@ static int __init pipey_init(void)
 		return -3;
 	}
 	init_waitqueue_head(&queue);
+	cyclic_buffer = init_cyclic_buffer();
+	if (!cyclic_buffer) {
+		printk("ERROR!! Failed to initialize cyclic buffer\n");
+		return -1;
+	}
 	return 0;
 } 
 
