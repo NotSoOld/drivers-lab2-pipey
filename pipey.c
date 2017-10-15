@@ -10,6 +10,7 @@
 #include <linux/cdev.h>    // cdev_init
 #include <linux/cred.h>    // get_current_user
 #include <linux/string.h>
+#include "pipey_ioctl.h"
 
 #define CBUFFERSIZE 65536
 #define DEVICES_COUNT 1
@@ -28,29 +29,46 @@ static dev_t dev;
 const struct file_operations pipey_file_ops;
 
 
-static int pipey_open(struct inode *i, struct file *f) 
+static char *init_cyclic_buffer(void)
 {
-	f->private_data = &(get_current_user()->uid.val);
-	return 0;
+	if (cyclic_buffer) {
+		kfree(cyclic_buffer);
+	}
+	char *buffer = (char *)kzalloc(CBUFFERSIZE * sizeof(char), GFP_USER);
+	if (buffer == NULL) {
+		printk("ERROR!! Failed to allocate memory for cyclic buffer.\n");
+		return NULL;
+	}
+	reader_handle = 0;
+	writer_handle = 0;
+	is_eof = 0;
+	return buffer;
 }
 
 
-//int pipey_release(struct inode *i, struct file *f) {}
+static int pipey_open(struct inode *i, struct file *f) 
+{
+	cyclic_buffer = init_cyclic_buffer();
+	if (!cyclic_buffer) {
+		return -1;
+	}
+	f->private_data = &(current_uid().val);//&(get_current_user()->uid.val);
+	return 0;
+}
 
 
 static long pipey_ioctl(struct file *f, unsigned int cmd, unsigned long arg) 
 {
 	switch (cmd) {
-		case 0x10:
-			// EOF
-			is_eof = 1;
+		case PIPEY_SET_EOF:
+			is_eof = arg;
 			break;
-		case 0x30:
-			// Exclusive read mode
+		case PIPEY_GET_EOF:
+			return is_eof;
+		case PIPEY_SET_EXCL_READ:
 			exclusive_read = 1;
 			break;
-		case 0x31:
-			// Normal read mode
+		case PIPEY_SET_NORM_READ:
 			exclusive_read = 0;
 			break;
 		default:
@@ -63,21 +81,23 @@ static long pipey_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
 static ssize_t pipey_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
 {
-	// Writes into buf! (user space app READS us)
-	if (exclusive_read && (*(uid_t *)(f->private_data)) != get_current_user()->uid.val) {
-		printk("Exclusive read mode - reading not permitted for you.\n");
-		return -1;
-	}
-	
 	unsigned long copied = 0;
 	ssize_t written = 0;
 	unsigned long available_bytes = 0;
+	
+	printk("excl: %d %d %d", exclusive_read, (*(uid_t *)(f->private_data)), get_current_user()->uid.val);
+	// Writes into buf! (user space app READS us)
+	if (exclusive_read && (*(uid_t *)(f->private_data)) != current_uid().val) {
+	//get_current_user()->uid.val) {
+		printk("Exclusive read mode - reading not permitted for you.\n");
+		return -1;
+	}
 	
 	while (true) {
 		if (reader_handle < writer_handle) {
 			available_bytes = writer_handle - reader_handle;
 			if (sz < available_bytes) {
-				if (copy_to_user(buf, cyclic_buffer + reader_handle, sz)) {
+				if (copy_to_user(buf+written, cyclic_buffer + reader_handle, sz)) {
 					printk("Error! Some bytes cannot be copied to user.\n");
 					return -1;
 				}
@@ -86,7 +106,7 @@ static ssize_t pipey_read(struct file *f, char __user *buf, size_t sz, loff_t *o
 				sz = 0;
 			}
 			else {
-				if (copy_to_user(buf, cyclic_buffer + reader_handle, available_bytes)) {
+				if (copy_to_user(buf+written, cyclic_buffer + reader_handle, available_bytes)) {
 					printk("Error! Some bytes cannot be copied to user.\n");
 					return -1;
 				}
@@ -98,8 +118,8 @@ static ssize_t pipey_read(struct file *f, char __user *buf, size_t sz, loff_t *o
 		else if ((reader_handle > writer_handle) || (writer_handle == reader_handle && buffer_not_empty == 1)) {
 			available_bytes = CBUFFERSIZE - reader_handle;
 			if (sz < available_bytes) {
-				if (copy_to_user(buf, cyclic_buffer + reader_handle, sz)) {
-					printk("Error! Some bytes cannot be copied to user.\n");
+				if (copy_to_user(buf+written, cyclic_buffer + reader_handle, sz)) {
+					printk("Error! some bytes cannot be copied to user.\n");
 					return -1;
 				}
 				written += sz;
@@ -107,7 +127,7 @@ static ssize_t pipey_read(struct file *f, char __user *buf, size_t sz, loff_t *o
 				sz = 0;
 			}
 			else {
-				if (copy_to_user(buf, cyclic_buffer + reader_handle, available_bytes)) {
+				if (copy_to_user(buf+written, cyclic_buffer + reader_handle, available_bytes)) {
 					printk("Error! Some bytes cannot be copied to user.\n");
 					return -1;
 				}
@@ -115,7 +135,7 @@ static ssize_t pipey_read(struct file *f, char __user *buf, size_t sz, loff_t *o
 				reader_handle = 0;
 				sz -= available_bytes;
 				copied = sz <= writer_handle ? sz : writer_handle;
-				if (copy_to_user(buf, cyclic_buffer, copied)) {
+				if (copy_to_user(buf+written, cyclic_buffer, copied)) {
 					printk("Error! Some bytes cannot be copied to user.\n");
 					return -1;
 				}
@@ -127,18 +147,13 @@ static ssize_t pipey_read(struct file *f, char __user *buf, size_t sz, loff_t *o
 		// Else - buffer is empty, wait for some data to arrive.
 		buffer_not_empty = 0;
 		
-		if (sz == 0) {
+		if (sz == 0 || (is_eof && reader_handle == writer_handle)) {
 			return written;
 		}
 		else {
-			if (is_eof) {
-				// This is the end of file, no more info will come, just return.
-				is_eof = 0;
-				return written;
-			}
 			// Wait for new information to arrive.
 			wake_up_interruptible(&queue);
-			wait_event_interruptible(queue, buffer_not_empty == 1);
+			wait_event_interruptible_timeout(queue, 1, 1);
 		}
 	}
 }
@@ -152,11 +167,10 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 	unsigned long available_bytes = 0;
 	
 	while (true) {
-		printk("Cycling in pipey_write...\n");
 		if (writer_handle < reader_handle) {
 			available_bytes = reader_handle - writer_handle;
 			if (sz < available_bytes) {
-				if (copy_from_user(cyclic_buffer + writer_handle, buf, sz)) {
+				if (copy_from_user(cyclic_buffer + writer_handle, buf+readed, sz)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}
@@ -165,7 +179,7 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 				sz = 0;
 			}
 			else {
-				if (copy_from_user(cyclic_buffer + writer_handle, buf, available_bytes)) {
+				if (copy_from_user(cyclic_buffer + writer_handle, buf+readed, available_bytes)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}
@@ -177,7 +191,7 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 		else if ((writer_handle > reader_handle) || (writer_handle == reader_handle && buffer_not_empty == 0)) {
 			available_bytes = CBUFFERSIZE - writer_handle;
 			if (sz < available_bytes) {
-				if (copy_from_user(cyclic_buffer + writer_handle, buf, sz)) {
+				if (copy_from_user(cyclic_buffer + writer_handle, buf+readed, sz)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}
@@ -186,7 +200,7 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 				sz = 0;
 			}
 			else {
-				if (copy_from_user(cyclic_buffer + writer_handle, buf, available_bytes)) {
+				if (copy_from_user(cyclic_buffer + writer_handle, buf+readed, available_bytes)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}
@@ -194,7 +208,7 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 				writer_handle = 0;
 				sz -= available_bytes;
 				copied = sz <= reader_handle ? sz : reader_handle;
-				if (copy_from_user(cyclic_buffer, buf, copied)) {
+				if (copy_from_user(cyclic_buffer, buf+readed, copied)) {
 					printk("Error! Some bytes cannot be copied from user.\n");
 					return -1;
 				}
@@ -212,32 +226,14 @@ static ssize_t pipey_write(struct file *f, const char __user *buf, size_t sz, lo
 		else {
 			// Wait for new information to depart (to free some buffer space).
 			wake_up_interruptible(&queue);
-			wait_event_interruptible(queue, buffer_not_empty == 0);
+			wait_event_interruptible_timeout(queue, 1, 1);
 		}
 	}
 }
 
 
-static char *init_cyclic_buffer(void)
-{
-	char *cyclic_buffer = (char *)kzalloc(CBUFFERSIZE * sizeof(char), GFP_USER);
-	if (cyclic_buffer == NULL) {
-		printk("ERROR!! Failed to allocate memory for cyclic buffer.\n");
-		return NULL;
-	}
-	reader_handle = 0;
-	writer_handle = 0;
-	return cyclic_buffer;
-}
-
-
 static int __init pipey_init(void)
-{
-	cyclic_buffer = init_cyclic_buffer();
-	if (!cyclic_buffer) {
-		return -1;
-	}
-	
+{	
 	dev = MKDEV(PIPEY_MAJOR, PIPEY_MINOR);
 	if (register_chrdev_region(dev, DEVICES_COUNT, "pipey")) {
 		printk("ERROR!! Failed to register pipey device.\n");
@@ -265,7 +261,6 @@ static void __exit pipey_exit(void)
 const struct file_operations pipey_file_ops = {
 	.owner = THIS_MODULE,
 	.open = pipey_open,
-	//.release = pipey_release,
 	.unlocked_ioctl = pipey_ioctl,
 	.write = pipey_write,
 	.read = pipey_read

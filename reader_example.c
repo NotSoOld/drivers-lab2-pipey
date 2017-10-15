@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "pipey_ioctl.h"
 
 #define BUFFER_SIZE 1024
 
@@ -13,7 +14,7 @@ void main(int argc, char **argv)
 	int pipe_fd;
 	int file_fd;
 	char *mesg = NULL;
-	unsigned int readed_from_file;
+	int readed_from_file;
 	char *buffer;
 	
 	if (argc != 2) {
@@ -33,17 +34,19 @@ void main(int argc, char **argv)
 		exit(3);
 	}
 	
+	ioctl(pipe_fd, PIPEY_SET_EXCL_READ);
 	buffer = (char *)calloc(BUFFER_SIZE, sizeof(char));
 	while (1) {
 		memset(buffer, 0, BUFFER_SIZE);
 		readed_from_file = read(file_fd, buffer, BUFFER_SIZE);
-		if (readed_from_file <= 0) {
-			ioctl(pipe_fd, 0x10);
-			break;
-		}
 		if (write(pipe_fd, buffer, readed_from_file) <= 0) {
 			perror("Error while writing to a pipe");
 			exit(4);
+		}
+		if (readed_from_file < BUFFER_SIZE) {
+			printf("END OF FILE\n");
+			ioctl(pipe_fd, PIPEY_SET_EOF, 1);
+			break;
 		}
 	}
 	
