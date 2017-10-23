@@ -28,7 +28,7 @@ void main(int argc, char **argv)
 		perror("ERROR!! Failed to open pipe");
 		exit(2);
 	}
-	file_fd = open(argv[1], O_WRONLY | O_CREAT, 0666);
+	file_fd = open(argv[1], O_WRONLY | O_CREAT, 0600);
 	if (file_fd < 0) {
 		perror("ERROR!! Failed to open file to write to");
 		exit(3);
@@ -47,9 +47,8 @@ void main(int argc, char **argv)
 			exit(5);
 		}
 		
-		if (readed_from_pipe < BUFFER_SIZE && ioctl(pipe_fd, PIPEY_GET_EOF)) {
+		if (readed_from_pipe == 0) {
 			printf("END OF PIPE\n");
-			ioctl(pipe_fd, PIPEY_SET_EOF, 0);
 			break;
 		}
 	}

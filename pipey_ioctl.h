@@ -1,4 +1,2 @@
-#define PIPEY_SET_EOF 0x10
-#define PIPEY_GET_EOF 0x11
 #define PIPEY_SET_EXCL_READ 0x30
 #define PIPEY_SET_NORM_READ 0x31

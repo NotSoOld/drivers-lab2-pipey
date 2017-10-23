@@ -45,7 +45,6 @@ void main(int argc, char **argv)
 		}
 		if (readed_from_file < BUFFER_SIZE) {
 			printf("END OF FILE\n");
-			ioctl(pipe_fd, PIPEY_SET_EOF, 1);
 			break;
 		}
 	}
